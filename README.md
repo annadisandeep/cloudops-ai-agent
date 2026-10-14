@@ -89,6 +89,28 @@ npm run dev
 
 Then: **Investigate → pick a demo scenario → Start investigation** and watch the agent's tool timeline, evidence, and report build live. OpenAPI docs at `http://localhost:8000/docs`.
 
+### Optional: Gemini mode with Docker
+
+The stack defaults to the deterministic mock planner (no credentials). To run the agent with Gemini instead:
+
+1. Create `backend/.env` (gitignored — never commit it; see [backend/.env.example](backend/.env.example)):
+   ```env
+   CLOUDOPS_LLM_PROVIDER=gemini
+   CLOUDOPS_GEMINI_API_KEY=<your key>
+   CLOUDOPS_GEMINI_MODEL=gemini-3.8-flash
+   ```
+2. Launch Compose with that file as its environment file:
+   ```bash
+   docker compose --env-file backend/.env up --build
+   ```
+3. Verify the active provider (the key itself is never returned):
+   ```bash
+   curl http://localhost:8080/api/v1/config
+   # → "llm": { "provider": "gemini", "model": "gemini-3.8-flash" }
+   ```
+
+Only `CLOUDOPS_LLM_PROVIDER`, `CLOUDOPS_GEMINI_API_KEY`, and `CLOUDOPS_GEMINI_MODEL` are forwarded to the backend container. The key never reaches the frontend image, API responses, or logs (regression-tested), and a missing key with `provider=gemini` fails closed. Plain `docker compose up --build` continues to run credential-free demo mode. See [docs/gemini.md](docs/gemini.md) for details.
+
 ## Feature status
 
 | Feature | Status |

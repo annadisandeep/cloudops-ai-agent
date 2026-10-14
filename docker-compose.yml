@@ -1,16 +1,29 @@
 # CloudOps AI Agent — local stack (demo mode, no cloud credentials required)
-# Usage: docker compose up --build  →  http://localhost:8080
+#
+# Quick start (mock LLM, zero credentials):
+#   docker compose up --build            →  http://localhost:8080
+#
+# Gemini mode (optional): put the LLM settings in backend/.env (gitignored,
+# never committed — see backend/.env.example) and launch with that file as the
+# Compose environment file:
+#   docker compose --env-file backend/.env up --build
+#
+# Only the three CLOUDOPS_* LLM variables listed below are forwarded to the
+# backend container; the API key exists solely as a backend-container env var —
+# it is never baked into images, sent to the frontend, logged, or returned by
+# any API response (enforced by tests).
 services:
   backend:
     build: ./backend
     environment:
       CLOUDOPS_DEMO_MODE: "true"
-      CLOUDOPS_LLM_PROVIDER: "mock"
       # Frontend is served same-origin via nginx; CORS only needed for dev servers.
       CLOUDOPS_CORS_ORIGINS: "http://localhost:8080,http://localhost:5173"
-      # To enable Gemini: set CLOUDOPS_LLM_PROVIDER=gemini and provide the key
-      # via an env file or secret manager — never commit it.
-      # CLOUDOPS_GEMINI_API_KEY: ${CLOUDOPS_GEMINI_API_KEY}
+      # LLM provider: defaults to the no-credential mock; override via
+      # backend/.env (with --env-file) or a shell variable.
+      CLOUDOPS_LLM_PROVIDER: ${CLOUDOPS_LLM_PROVIDER:-mock}
+      CLOUDOPS_GEMINI_API_KEY: ${CLOUDOPS_GEMINI_API_KEY:-}
+      CLOUDOPS_GEMINI_MODEL: ${CLOUDOPS_GEMINI_MODEL:-gemini-3.8-flash}
     volumes:
       - cloudops-data:/app/data
     expose:
