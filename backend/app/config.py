@@ -39,7 +39,10 @@ class Settings(BaseSettings):
     # --- LLM -------------------------------------------------------------
     llm_provider: str = "mock"  # "mock" | "gemini"
     gemini_api_key: str = ""  # backend-only; never exposed via the API
-    gemini_model: str = "gemini-2.5-flash"
+    # Stable GA Flash model as of 2026-10 (2.x series retired; gemini-3.7-flash
+    # deprecated 2026-10-08). Override with CLOUDOPS_GEMINI_MODEL; verify
+    # availability against your API key.
+    gemini_model: str = "gemini-3.8-flash"
 
     # --- Agent limits ----------------------------------------------------
     max_steps: int = Field(default=8, ge=1, le=20)

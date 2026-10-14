@@ -13,9 +13,8 @@ There is deliberately no shell, HTTP, IAM, restart, delete, or apply tool.
 from __future__ import annotations
 
 import json
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,7 +28,22 @@ from .sanitize import detect_injection, sanitize_untrusted
 
 ALLOWED_TOOLS = frozenset({"list_resources", "get_resource_metadata", "get_metrics", "query_logs"})
 
-TRANSIENT_ERRORS = (ConnectionError, TimeoutError, FutureTimeoutError)
+
+class ToolTimeout(Exception):
+    """A tool call exceeded its wall-clock budget; its worker was abandoned."""
+
+
+class WorkerBudgetExhausted(Exception):
+    """Too many abandoned (timed-out) workers; refusing to start more."""
+
+
+TRANSIENT_ERRORS = (ConnectionError, TimeoutError)
+
+# Hard cap on worker threads a single investigation may abandon via timeouts.
+# Python cannot cancel a thread blocked inside an SDK call, so a timed-out
+# worker keeps running (as a daemon) until the underlying call returns on its
+# own; this cap keeps that leakage strictly bounded per investigation.
+MAX_ABANDONED_WORKERS = 3
 
 
 class ListResourcesInput(BaseModel):
@@ -111,6 +125,7 @@ class ToolExecutor:
         self.investigation_id = investigation_id
         self.settings = get_settings()
         self._evidence_counter = 0
+        self._abandoned_workers = 0
 
     def _next_evidence_id(self) -> str:
         self._evidence_counter += 1
@@ -144,18 +159,21 @@ class ToolExecutor:
         while attempts <= self.settings.tool_retry_budget:
             attempts += 1
             try:
-                with ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(self._dispatch, tool, args)
-                    output, summary, evidence = future.result(
-                        timeout=self.settings.tool_timeout_seconds
-                    )
+                output, summary, evidence = self._run_with_timeout(tool, args)
                 step.status = "completed"
                 step.output_summary = summary
                 step.duration_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
                 step.evidence_ids = [e.id for e in evidence]
                 return step, evidence
-            except FutureTimeoutError:
+            except ToolTimeout:
+                # Retryable, but each timeout consumes abandoned-worker budget.
                 last_error = f"Tool timed out after {self.settings.tool_timeout_seconds}s"
+            except WorkerBudgetExhausted:
+                last_error = (
+                    f"Abandoned-worker budget exhausted ({MAX_ABANDONED_WORKERS} timed-out calls); "
+                    "refusing further tool execution for this investigation."
+                )
+                break
             except ApiError as exc:
                 # Deterministic failures (not found, validation) are not retried.
                 last_error = exc.message
@@ -171,6 +189,53 @@ class ToolExecutor:
         step.error = last_error or "Unknown tool failure"
         step.duration_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
         return step, []
+
+    def _run_with_timeout(self, tool: str, args: BaseModel) -> tuple[dict, str, list[Evidence]]:
+        """Run the dispatch in a daemon worker with a hard wall-clock wait.
+
+        Rationale: a context-managed ThreadPoolExecutor blocks on exit
+        (``shutdown(wait=True)``) until the running task finishes — so a
+        "timed out" tool call would still stall the agent for as long as the
+        SDK call takes, defeating the timeout. Python offers no way to cancel
+        a thread blocked in an SDK call (cancellation is cooperative and the
+        google-cloud/boto3 clients expose none mid-call), so instead:
+
+        - the worker is a **daemon** thread: an abandoned call never blocks
+          agent progress or process shutdown;
+        - its result/exception is discarded after timeout (state is only
+          mutated by the caller, never by the worker);
+        - abandoned workers are counted and capped (MAX_ABANDONED_WORKERS),
+          so leakage per investigation is strictly bounded;
+        - first-line defense remains the SDKs' own connect/read timeouts and
+          bounded retries configured in the provider adapters, plus the
+          overall investigation deadline enforced by the runner.
+        """
+        if self._abandoned_workers >= MAX_ABANDONED_WORKERS:
+            raise WorkerBudgetExhausted()
+
+        outcome: dict[str, Any] = {}
+        done = threading.Event()
+
+        def target() -> None:
+            try:
+                outcome["value"] = self._dispatch(tool, args)
+            except BaseException as exc:  # propagated to caller below
+                outcome["error"] = exc
+            finally:
+                done.set()
+
+        worker = threading.Thread(
+            target=target,
+            daemon=True,
+            name=f"tool-{tool}-{self.investigation_id}",
+        )
+        worker.start()
+        if not done.wait(self.settings.tool_timeout_seconds):
+            self._abandoned_workers += 1
+            raise ToolTimeout()
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
 
     # -- dispatchers ---------------------------------------------------------
 

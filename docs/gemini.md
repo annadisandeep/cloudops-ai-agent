@@ -14,11 +14,11 @@ Status: the Gemini planner is **implemented and mock-tested** (schema-validated 
    ```env
    CLOUDOPS_LLM_PROVIDER=gemini
    CLOUDOPS_GEMINI_API_KEY=<your key>     # backend-only; never committed
-   CLOUDOPS_GEMINI_MODEL=gemini-2.5-flash
+   CLOUDOPS_GEMINI_MODEL=gemini-3.8-flash
    ```
 3. Restart the backend. `/api/v1/config` will report `llm.provider: "gemini"` (the key itself is never exposed).
 
-**Verify the model id.** Model availability changes; confirm `CLOUDOPS_GEMINI_MODEL` is available to your key (e.g. list models in AI Studio) before relying on it. The app does not assume a model exists — a bad id fails the investigation with a safe error, and the deterministic analyzer still produces the report baseline.
+**Verify the model id.** The default `gemini-3.8-flash` is the stable GA Flash model as of October 2026 (the 2.x series is retired; `gemini-3.7-flash` was deprecated 2026-10-08). Model availability changes — confirm `CLOUDOPS_GEMINI_MODEL` is available to your key (e.g. list models in AI Studio) before relying on it. The app does not assume a model exists — a bad id fails the investigation with a safe error, and the deterministic analyzer still produces the report baseline.
 
 ## Behavior & safeguards
 

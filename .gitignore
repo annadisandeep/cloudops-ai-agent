@@ -30,11 +30,16 @@ service-account*.json
 .aws/
 .gcp/
 
-# Local data
-backend/data/*.db
-backend/data/*.sqlite3
+# Local data (SQLite databases incl. journal/WAL/shared-memory sidecars)
+backend/data/
 *.db
 *.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
 
 # Terraform
 .terraform/

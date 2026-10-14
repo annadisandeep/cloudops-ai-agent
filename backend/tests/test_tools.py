@@ -79,22 +79,73 @@ def test_logs_tool_redacts_secrets(executor):
     assert "[REDACTED" in text
 
 
-def test_tool_timeout(window, monkeypatch):
+class SlowAdapter(DemoAdapter):
+    """Simulates an SDK call that ignores the agent's timeout (sleeps 5s)."""
+
+    def get_resource(self, resource_id):
+        import time
+
+        time.sleep(5)
+        return super().get_resource(resource_id)
+
+
+def test_tool_timeout_does_not_block_on_worker(window, monkeypatch):
+    monkeypatch.setenv("CLOUDOPS_TOOL_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("CLOUDOPS_TOOL_RETRY_BUDGET", "0")
+    get_settings.cache_clear()
+    import time
+
+    executor = ToolExecutor(SlowAdapter(), window, "inv_test")
+    t0 = time.monotonic()
+    step, _ = executor.execute("get_resource_metadata", {"resource_id": "web-frontend-1"}, 0)
+    elapsed = time.monotonic() - t0
+    assert step.status == "failed"
+    assert "timed out" in (step.error or "")
+    # The 5s worker must be abandoned, not awaited: well under the task duration.
+    assert elapsed < 3.0, f"timeout must not wait for the running worker (took {elapsed:.1f}s)"
+
+
+def test_executor_usable_after_timeout_and_worker_result_discarded(window, monkeypatch):
     monkeypatch.setenv("CLOUDOPS_TOOL_TIMEOUT_SECONDS", "1")
     monkeypatch.setenv("CLOUDOPS_TOOL_RETRY_BUDGET", "0")
     get_settings.cache_clear()
 
-    class SlowAdapter(DemoAdapter):
-        def get_resource(self, resource_id):
-            import time
+    class SlowMetadataOnly(SlowAdapter):
+        pass
 
-            time.sleep(5)
-            return super().get_resource(resource_id)
+    executor = ToolExecutor(SlowMetadataOnly(), window, "inv_test")
+    timed_out, _ = executor.execute("get_resource_metadata", {"resource_id": "web-frontend-1"}, 0)
+    assert timed_out.status == "failed"
+    # Metrics path is untouched by the slow override — next call must work and
+    # the abandoned worker's late result must not corrupt the new step.
+    ok, evidence = executor.execute(
+        "get_metrics", {"resource_id": "web-frontend-1", "metric": "cpu_utilization"}, 1
+    )
+    assert ok.status == "completed"
+    assert evidence and evidence[0].id == "ev_1"  # counter untouched by abandoned worker
+
+
+def test_abandoned_worker_budget_fails_fast(window, monkeypatch):
+    monkeypatch.setenv("CLOUDOPS_TOOL_TIMEOUT_SECONDS", "1")
+    monkeypatch.setenv("CLOUDOPS_TOOL_RETRY_BUDGET", "0")
+    get_settings.cache_clear()
+    import time
+
+    from app.agent.tools import MAX_ABANDONED_WORKERS
 
     executor = ToolExecutor(SlowAdapter(), window, "inv_test")
-    step, _ = executor.execute("get_resource_metadata", {"resource_id": "web-frontend-1"}, 0)
+    for i in range(MAX_ABANDONED_WORKERS):
+        step, _ = executor.execute("get_resource_metadata", {"resource_id": "web-frontend-1"}, i)
+        assert "timed out" in (step.error or "")
+
+    t0 = time.monotonic()
+    step, _ = executor.execute(
+        "get_resource_metadata", {"resource_id": "web-frontend-1"}, MAX_ABANDONED_WORKERS
+    )
+    elapsed = time.monotonic() - t0
     assert step.status == "failed"
-    assert "timed out" in (step.error or "")
+    assert "budget exhausted" in (step.error or "")
+    assert elapsed < 0.5, "budget exhaustion must fail fast without spawning a worker"
 
 
 def test_transient_error_retried(window, monkeypatch):

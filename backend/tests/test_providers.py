@@ -43,6 +43,91 @@ class TestDemoAdapter:
             DemoAdapter().get_metrics("web-frontend-1", "quantum_flux", end - timedelta(hours=1), end)
 
 
+class TestAllowlistEnforcedBeforeApiAccess:
+    """Regression: unapproved projects/accounts are rejected BEFORE any cloud
+    data API is touched — not after a call fails."""
+
+    def test_gcp_unapproved_project_rejected_before_any_client(self, monkeypatch):
+        monkeypatch.setenv("CLOUDOPS_GCP_ENABLED", "true")
+        monkeypatch.setenv("CLOUDOPS_GCP_ALLOWED_PROJECTS", "allowed-project")
+        get_settings.cache_clear()
+        from app.providers.gcp import GcpAdapter
+
+        with (
+            patch.object(GcpAdapter, "_compute_client") as compute,
+            patch.object(GcpAdapter, "_monitoring_client") as monitoring,
+            patch.object(GcpAdapter, "_logging_client") as logging_client,
+        ):
+            with pytest.raises(ProviderDisabledError):
+                GcpAdapter("not-allowed-project")
+            compute.assert_not_called()
+            monitoring.assert_not_called()
+            logging_client.assert_not_called()
+
+    def test_gcp_disabled_rejected_before_any_client(self, monkeypatch):
+        monkeypatch.setenv("CLOUDOPS_GCP_ENABLED", "false")
+        get_settings.cache_clear()
+        from app.providers.gcp import GcpAdapter
+
+        with patch.object(GcpAdapter, "_compute_client") as compute:
+            with pytest.raises(ProviderDisabledError):
+                GcpAdapter("any-project")
+            compute.assert_not_called()
+
+    def test_aws_empty_allowlist_rejected_before_session_or_sts(self, monkeypatch):
+        monkeypatch.setenv("CLOUDOPS_AWS_ENABLED", "true")
+        monkeypatch.setenv("CLOUDOPS_AWS_ALLOWED_ACCOUNTS", "")
+        get_settings.cache_clear()
+        from app.providers.aws import AwsAdapter
+
+        with (
+            patch.object(AwsAdapter, "_build_session") as build_session,
+            patch.object(AwsAdapter, "_client") as client,
+        ):
+            with pytest.raises(ProviderDisabledError):
+                AwsAdapter()
+            build_session.assert_not_called()
+            client.assert_not_called()
+
+    def test_aws_unapproved_account_never_touches_data_apis(self, monkeypatch):
+        monkeypatch.setenv("CLOUDOPS_AWS_ENABLED", "true")
+        monkeypatch.setenv("CLOUDOPS_AWS_ALLOWED_ACCOUNTS", "123456789012")
+        get_settings.cache_clear()
+        from app.providers.aws import AwsAdapter
+
+        requested_services: list[str] = []
+        sts = MagicMock()
+        sts.get_caller_identity.return_value = {"Account": "999999999999"}
+
+        def tracking_client(self, service):
+            requested_services.append(service)
+            if service != "sts":
+                raise AssertionError(f"data API client '{service}' requested for unapproved account")
+            return sts
+
+        with patch.object(AwsAdapter, "_build_session", return_value=MagicMock()):
+            with patch.object(AwsAdapter, "_client", tracking_client):
+                with pytest.raises(ProviderDisabledError):
+                    AwsAdapter()
+        # Identity verification (STS) is the only service ever touched.
+        assert requested_services == ["sts"]
+
+    def test_aws_requested_account_mismatch_rejected(self, monkeypatch):
+        monkeypatch.setenv("CLOUDOPS_AWS_ENABLED", "true")
+        monkeypatch.setenv("CLOUDOPS_AWS_ALLOWED_ACCOUNTS", "123456789012")
+        get_settings.cache_clear()
+        from app.providers.aws import AwsAdapter
+
+        sts = MagicMock()
+        sts.get_caller_identity.return_value = {"Account": "123456789012"}
+        with patch.object(AwsAdapter, "_build_session", return_value=MagicMock()):
+            with patch.object(AwsAdapter, "_client", return_value=sts):
+                with pytest.raises(ProviderDisabledError):
+                    # Credentials are allowlisted, but the caller asked for a
+                    # different account — must still be rejected.
+                    AwsAdapter(account="999999999999")
+
+
 class TestRegistryFailClosed:
     def test_demo_disabled_blocks_demo_provider(self, monkeypatch):
         monkeypatch.setenv("CLOUDOPS_DEMO_MODE", "false")
