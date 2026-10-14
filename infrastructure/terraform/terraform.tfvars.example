@@ -1,0 +1,14 @@
+# Copy to terraform.tfvars (gitignored) and edit. Both stacks stay disabled
+# until you explicitly flip them after review.
+
+enable_gcp = false
+enable_aws = false
+
+gcp_project_id = "my-project-id"
+gcp_region     = "us-central1"
+aws_region     = "us-east-1"
+
+backend_image  = "us-central1-docker.pkg.dev/my-project-id/cloudops/backend:latest"
+frontend_image = "us-central1-docker.pkg.dev/my-project-id/cloudops/frontend:latest"
+
+cors_origins = "https://cloudops-frontend-xxxxx-uc.a.run.app"

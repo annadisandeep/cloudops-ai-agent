@@ -1,14 +1,23 @@
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+.eggs/
 .venv/
 venv/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+coverage.xml
 
 # Node
 node_modules/
 dist/
+.vite/
+*.tsbuildinfo
+coverage/
 
 # Environment & secrets
 .env
@@ -18,10 +27,19 @@ dist/
 *.key
 credentials*.json
 service-account*.json
+.aws/
+.gcp/
 
-# Local data
+# Local data (SQLite databases incl. journal/WAL/shared-memory sidecars)
+backend/data/
 *.db
 *.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
 
 # Terraform
 .terraform/
@@ -30,9 +48,14 @@ service-account*.json
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+terraform.tfplan
 
 # IDE / OS
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log
+logs/
