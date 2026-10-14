@@ -22,11 +22,11 @@ Status: the Gemini planner is **implemented and mock-tested** (schema-validated 
 
 ## Behavior & safeguards
 
-- Decisions and reports are requested with `response_schema` and validated by Pydantic; invalid output → safe failure, not silent acceptance.
+- Decisions and reports are requested with `response_schema` and validated by Pydantic; invalid output → safe failure, not silent acceptance. Tool arguments travel as a JSON string (`args_json`) because the Gemini Developer API rejects open-dict schemas (`additionalProperties`); they are parsed and schema-validated locally before any tool sees them.
 - A proposed tool outside the read-only allowlist is never executed.
 - All telemetry in prompts is secret-redacted and wrapped in untrusted-data delimiters.
-- Report generation failure falls back to the deterministic analyzer and says so in the limitations.
-- Without a key, investigations fail closed with `llm_unconfigured` — there is no hidden downgrade.
+- **Resilient fallback**: a runtime Gemini failure (API 5xx, quota, unavailable model, invalid request, malformed structured output, network) degrades that investigation to the deterministic planner — evidence collection continues under all existing limits instead of ending early. The failure is logged and surfaced in the report's limitations with a sanitized category (`model_unavailable`, `quota_exhausted`, `invalid_request`, `api_server_error`, `auth_error`, `malformed_structured_output`, `transient_network`), and the report's `llm_provider` always names the engine that actually wrote it — a fallback report is never attributed to Gemini.
+- Without a key, investigations fail closed with `llm_unconfigured` — misconfiguration is not silently downgraded.
 
 ## Cost notes
 

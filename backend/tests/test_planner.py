@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.agent.planner import GeminiPlanner, MockPlanner, PlannerDecision, get_planner
+from app.agent.planner import GeminiPlanner, MockPlanner, get_planner
 from app.config import get_settings
 from app.errors import ApiError
 
@@ -46,8 +46,10 @@ class TestGeminiPlanner:
         planner = GeminiPlanner.__new__(GeminiPlanner)  # skip client construction
         planner._model = "test"
 
+        from app.agent.planner import _GeminiDecision
+
         def fake_generate(prompt, schema):
-            return PlannerDecision(action="call_tool", tool="delete_all_instances", args={})
+            return _GeminiDecision(action="call_tool", tool="delete_all_instances", args_json="{}")
 
         planner._generate = fake_generate  # type: ignore[method-assign]
         decision = planner.decide({

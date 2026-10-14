@@ -1,6 +1,6 @@
 """Planners decide the agent's next tool call and author the final report.
 
-Two implementations:
+Implementations:
 
 - ``MockPlanner`` — deterministic, LLM-free. Default in demo mode and the
   tested fallback everywhere. Tool selection is keyword/scenario driven and the
@@ -8,7 +8,11 @@ Two implementations:
 - ``GeminiPlanner`` — structured tool selection and report authoring via the
   official google-genai SDK. Fails closed without an API key. All telemetry
   interpolated into prompts is sanitized and delimited as untrusted data.
-  Status: implemented and mock-tested (not yet verified against the live API).
+- ``ResilientPlanner`` — wraps a primary LLM planner with the deterministic
+  fallback: a runtime LLM failure degrades the investigation to the mock
+  planner (evidence collection continues within the existing limits) instead
+  of ending it, and the final report honestly attributes which engine wrote
+  it. Configuration errors (missing key) still fail closed at construction.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..config import get_settings
 from ..errors import ApiError
 from ..schemas import Report
+from ..security import redact_secrets
 from .analysis import build_report
 from .sanitize import wrap_untrusted_for_llm
 from .state import AgentState
@@ -35,6 +40,55 @@ class PlannerDecision(BaseModel):
     tool: str | None = None
     args: dict[str, Any] = Field(default_factory=dict)
     reasoning: str = ""
+
+
+# --- Sanitized LLM error categorization -----------------------------------------
+
+LLM_ERROR_CATEGORIES = (
+    "model_unavailable",     # 404 / NOT_FOUND: model id not accessible to this key
+    "quota_exhausted",       # 429 / RESOURCE_EXHAUSTED
+    "invalid_request",       # 400 / INVALID_ARGUMENT (e.g. unsupported schema)
+    "api_server_error",      # 5xx from the Gemini API
+    "auth_error",            # 401/403 / PERMISSION_DENIED / invalid key
+    "malformed_structured_output",  # response failed schema validation
+    "transient_network",     # connection/timeout on our side
+    "unknown",
+)
+
+
+def categorize_llm_error(exc: BaseException) -> tuple[str, str]:
+    """Map an LLM failure to a stable category plus a sanitized message.
+
+    Duck-typed on class name / status attributes so it works across google-genai
+    versions and is unit-testable without constructing real SDK errors. The
+    message is secret-redacted and truncated — safe for logs and report
+    limitations.
+    """
+    name = type(exc).__name__
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    text = f"{name}: {exc}"
+    upper = text.upper()
+
+    if isinstance(exc, ApiError) and exc.code == "llm_invalid_output":
+        category = "malformed_structured_output"
+    elif isinstance(exc, ConnectionError | TimeoutError):
+        category = "transient_network"
+    elif code == 404 or "NOT_FOUND" in upper or "IS NOT FOUND" in upper:
+        category = "model_unavailable"
+    elif code == 429 or "RESOURCE_EXHAUSTED" in upper or "QUOTA" in upper:
+        category = "quota_exhausted"
+    elif (code in (401, 403) or "PERMISSION_DENIED" in upper
+          or "API KEY NOT VALID" in upper or "UNAUTHENTICATED" in upper):
+        category = "auth_error"
+    elif code == 400 or "INVALID_ARGUMENT" in upper or "ADDITIONALPROPERTIES" in upper:
+        # Includes the SDK's client-side schema rejection, e.g. "additionalProperties
+        # is only supported in Gemini Enterprise Agent Platform mode" for open dicts.
+        category = "invalid_request"
+    elif name == "ServerError" or (isinstance(code, int) and code >= 500) or "INTERNAL" in upper:
+        category = "api_server_error"
+    else:
+        category = "unknown"
+    return category, redact_secrets(text)[:300]
 
 
 class Planner(Protocol):
@@ -181,6 +235,26 @@ Hard rules:
 - Distinguish observed facts from hypotheses. Recommend only safe, non-destructive actions."""
 
 
+class _GeminiDecision(BaseModel):
+    """Gemini-facing decision schema.
+
+    The public ``PlannerDecision`` carries ``args: dict[str, Any]``, which the
+    Gemini structured-output API cannot express (OBJECT schemas must declare
+    non-empty ``properties``; an open dict produces an invalid/500-prone
+    request). Tool arguments are therefore requested as a JSON object string
+    and parsed + schema-validated locally before any tool sees them.
+    """
+
+    action: Literal["call_tool", "finish"]
+    tool: str | None = None
+    args_json: str = Field(
+        default="{}",
+        description='Tool arguments as a JSON object string, '
+        'e.g. {"resource_id": "web-1", "metric": "cpu_utilization"}',
+    )
+    reasoning: str = ""
+
+
 class GeminiPlanner:
     """LLM planner using the official google-genai SDK with structured output."""
 
@@ -196,9 +270,15 @@ class GeminiPlanner:
             )
         try:
             from google import genai  # lazy import
+            from google.genai import types as genai_types
         except ImportError as exc:  # pragma: no cover
             raise ApiError("dependency_missing", "google-genai is not installed.", 500) from exc
-        self._client = genai.Client(api_key=settings.gemini_api_key)
+        # Hard per-call HTTP timeout (ms): a hung LLM request must degrade to
+        # the deterministic fallback, not stall the investigation thread.
+        self._client = genai.Client(
+            api_key=settings.gemini_api_key,
+            http_options=genai_types.HttpOptions(timeout=settings.llm_timeout_seconds * 1000),
+        )
         self._model = settings.gemini_model
 
     # -- prompt assembly ---------------------------------------------------
@@ -247,11 +327,23 @@ class GeminiPlanner:
             f"Steps used: {state.get('step_count', 0)}/{state.get('max_steps')}\n\n"
             f"Available tools:\n{tools_desc}\n\n"
             f"History:\n{self._history_block(state)}\n\n"
-            "Decide the single next action. Finish when you have enough evidence "
+            "Decide the single next action. Provide tool arguments in args_json as a "
+            "JSON object string. Finish when you have enough evidence "
             "(metadata + relevant metrics + logs) or when remaining steps are low."
         )
-        decision = self._generate(prompt, PlannerDecision)
-        assert isinstance(decision, PlannerDecision)
+        raw = self._generate(prompt, _GeminiDecision)
+        assert isinstance(raw, _GeminiDecision)
+        try:
+            args = json.loads(raw.args_json or "{}")
+            if not isinstance(args, dict):
+                raise ValueError("args_json must encode a JSON object")
+        except (ValueError, TypeError) as exc:
+            raise ApiError(
+                "llm_invalid_output", "LLM returned malformed tool arguments (args_json).", 502
+            ) from exc
+        decision = PlannerDecision(
+            action=raw.action, tool=raw.tool, args=args, reasoning=raw.reasoning
+        )
         if decision.action == "call_tool" and decision.tool not in ALLOWED_TOOLS:
             # Never execute an un-allowlisted tool, whatever the model says.
             logger.warning("Gemini proposed disallowed tool %r; finishing instead", decision.tool)
@@ -282,8 +374,85 @@ class GeminiPlanner:
         return report
 
 
+# --- Resilient wrapper ----------------------------------------------------------
+
+
+class ResilientPlanner:
+    """Primary LLM planner with deterministic fallback and honest attribution.
+
+    A runtime failure of the primary (API error, quota, bad model, malformed
+    structured output, network) permanently degrades THIS investigation to the
+    deterministic fallback — evidence collection continues under all existing
+    limits instead of ending with zero tool calls. Every degradation is logged
+    with a sanitized, categorized diagnostic, surfaced in the report's
+    limitations, and the report's ``llm_provider`` always names the engine that
+    actually wrote it.
+
+    Deliberately NOT handled here: construction-time configuration errors
+    (missing API key) still fail closed in ``get_planner``.
+    """
+
+    def __init__(self, primary: Planner, fallback: MockPlanner) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self.degraded = False
+        self.failure_stage: str | None = None  # "planning" | "report"
+        self.failure_category: str | None = None
+        self.failure_detail: str | None = None
+        self.failed_at_step: int | None = None
+
+    @property
+    def name(self) -> str:
+        return self._fallback.name if self.degraded else self._primary.name
+
+    def _degrade(self, stage: str, exc: BaseException, state: AgentState) -> None:
+        category, detail = categorize_llm_error(exc)
+        self.degraded = True
+        self.failure_stage = stage
+        self.failure_category = category
+        self.failure_detail = detail
+        self.failed_at_step = len(state.get("steps", []))
+        logger.warning(
+            "LLM planner '%s' failed during %s at step %s — degrading to deterministic "
+            "fallback. category=%s detail=%s",
+            self._primary.name, stage, self.failed_at_step, category, detail,
+        )
+
+    def _fallback_limitation(self) -> str:
+        return (
+            f"The configured LLM planner ({self._primary.name}) failed during "
+            f"{self.failure_stage} after {self.failed_at_step} tool step(s) "
+            f"[{self.failure_category}: {self.failure_detail}]. The deterministic "
+            "planner/analyzer completed this investigation; no LLM-generated content is included."
+        )
+
+    def decide(self, state: AgentState) -> PlannerDecision:
+        if not self.degraded:
+            try:
+                return self._primary.decide(state)
+            except Exception as exc:
+                self._degrade("planning", exc, state)
+        return self._fallback.decide(state)
+
+    def write_report(self, state: AgentState, simulated: bool) -> Report:
+        if not self.degraded:
+            try:
+                report = self._primary.write_report(state, simulated)
+                report.llm_provider = self._primary.name  # honest attribution
+                return report
+            except Exception as exc:
+                self._degrade("report", exc, state)
+        report = self._fallback.write_report(state, simulated)
+        report.llm_provider = self._fallback.name  # honest attribution: not the LLM
+        if self.failure_category is not None:
+            report.limitations.append(self._fallback_limitation())
+        return report
+
+
 def get_planner(scenario_key_metrics: list[str] | None = None) -> Planner:
     settings = get_settings()
     if settings.llm_provider == "gemini":
-        return GeminiPlanner()
+        # Construction fails closed on misconfiguration (e.g. missing key);
+        # runtime API failures degrade gracefully via the resilient wrapper.
+        return ResilientPlanner(GeminiPlanner(), MockPlanner(scenario_key_metrics))
     return MockPlanner(scenario_key_metrics)

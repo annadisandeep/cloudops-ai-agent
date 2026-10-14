@@ -123,7 +123,7 @@ Only `CLOUDOPS_LLM_PROVIDER`, `CLOUDOPS_GEMINI_API_KEY`, and `CLOUDOPS_GEMINI_MO
 | Terraform (Cloud Run + read-only IAM) | ✅ Written & `terraform validate` passing — **provisions nothing by default** |
 | GCP live adapter (read-only) | 🧪 Implemented & mock-tested — not yet verified against a live project |
 | AWS live adapter (read-only) | 🧪 Implemented & mock-tested — not yet verified against a live account |
-| Gemini planner (google-genai, structured output) | 🧪 Implemented & mock-tested — requires `CLOUDOPS_GEMINI_API_KEY`; model configurable |
+| Gemini planner (google-genai, structured output) | ✅ Implemented; resilient deterministic fallback **verified against the live API** (a runtime Gemini failure degrades gracefully with honest attribution). Full Gemini-authored runs depend on model availability/latency — see [docs/gemini.md](docs/gemini.md) |
 | Multi-user auth / audit trail | 🔭 Planned — see [docs/security.md](docs/security.md) |
 
 ## Documentation
