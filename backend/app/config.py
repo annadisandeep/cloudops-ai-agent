@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # deprecated 2026-10-08). Override with CLOUDOPS_GEMINI_MODEL; verify
     # availability against your API key.
     gemini_model: str = "gemini-3.8-flash"
+    # Hard HTTP timeout for each LLM call — a hung Gemini request degrades the
+    # investigation to the deterministic planner instead of stalling it.
+    llm_timeout_seconds: int = Field(default=45, ge=5, le=300)
 
     # --- Agent limits ----------------------------------------------------
     max_steps: int = Field(default=8, ge=1, le=20)
