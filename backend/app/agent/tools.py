@@ -45,6 +45,61 @@ TRANSIENT_ERRORS = (ConnectionError, TimeoutError)
 # own; this cap keeps that leakage strictly bounded per investigation.
 MAX_ABANDONED_WORKERS = 3
 
+# Placeholder id carried by Evidence while it is still inside a worker thread.
+# Final ids are assigned ONLY by the calling thread (see
+# ToolExecutor._assign_evidence_ids) so an abandoned worker can never race the
+# id counter or leak a numbered Evidence record.
+PENDING_EVIDENCE_ID = "ev_pending"
+
+
+class _WorkerSlots:
+    """Application-wide bound on concurrently running tool worker threads.
+
+    Every tool worker (including ones later abandoned by a timeout) holds a
+    slot from spawn until its underlying call actually returns — so the total
+    number of live tool threads across ALL concurrent investigations is capped
+    by ``max_concurrent_tool_workers``. When the pool is exhausted, new tool
+    calls fail fast instead of spawning unbounded threads.
+
+    Releases are matched to acquisitions with a generation token so the
+    test-only ``reset()`` cannot be double-decremented by stale workers
+    releasing after a reset.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._active = 0
+        self._generation = 0
+
+    def _limit(self) -> int:
+        return get_settings().max_concurrent_tool_workers
+
+    def try_acquire(self) -> int | None:
+        """Returns a release token, or None when the pool is exhausted."""
+        with self._lock:
+            if self._active >= self._limit():
+                return None
+            self._active += 1
+            return self._generation
+
+    def release(self, token: int) -> None:
+        with self._lock:
+            if token == self._generation and self._active > 0:
+                self._active -= 1
+
+    def active(self) -> int:
+        with self._lock:
+            return self._active
+
+    def reset(self) -> None:
+        """Test helper: invalidate outstanding tokens and zero the count."""
+        with self._lock:
+            self._generation += 1
+            self._active = 0
+
+
+WORKER_SLOTS = _WorkerSlots()
+
 
 class ListResourcesInput(BaseModel):
     model_config = {"extra": "forbid"}
@@ -128,8 +183,21 @@ class ToolExecutor:
         self._abandoned_workers = 0
 
     def _next_evidence_id(self) -> str:
+        # CALLER-THREAD ONLY: never invoked from a worker thread (see
+        # _assign_evidence_ids), so abandoned workers cannot race this counter.
         self._evidence_counter += 1
         return f"ev_{self._evidence_counter}"
+
+    def _assign_evidence_ids(self, evidence: list[Evidence]) -> None:
+        """Replace placeholder ids with final sequential ids.
+
+        Runs in the calling thread, strictly after a successful (non-timed-out)
+        worker return. Evidence built inside an abandoned worker keeps its
+        PENDING placeholder and is discarded with the worker's outcome, so ids
+        are unique and gapless regardless of when stale workers finish.
+        """
+        for ev in evidence:
+            ev.id = self._next_evidence_id()
 
     # -- execution ----------------------------------------------------------
 
@@ -160,6 +228,9 @@ class ToolExecutor:
             attempts += 1
             try:
                 output, summary, evidence = self._run_with_timeout(tool, args)
+                # Ids are assigned here, in the caller thread, only for results
+                # that were actually accepted (never inside workers).
+                self._assign_evidence_ids(evidence)
                 step.status = "completed"
                 step.output_summary = summary
                 step.duration_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
@@ -168,11 +239,8 @@ class ToolExecutor:
             except ToolTimeout:
                 # Retryable, but each timeout consumes abandoned-worker budget.
                 last_error = f"Tool timed out after {self.settings.tool_timeout_seconds}s"
-            except WorkerBudgetExhausted:
-                last_error = (
-                    f"Abandoned-worker budget exhausted ({MAX_ABANDONED_WORKERS} timed-out calls); "
-                    "refusing further tool execution for this investigation."
-                )
+            except WorkerBudgetExhausted as exc:
+                last_error = str(exc) or "Tool worker budget exhausted."
                 break
             except ApiError as exc:
                 # Deterministic failures (not found, validation) are not retried.
@@ -202,16 +270,33 @@ class ToolExecutor:
 
         - the worker is a **daemon** thread: an abandoned call never blocks
           agent progress or process shutdown;
-        - its result/exception is discarded after timeout (state is only
-          mutated by the caller, never by the worker);
-        - abandoned workers are counted and capped (MAX_ABANDONED_WORKERS),
-          so leakage per investigation is strictly bounded;
+        - its result/exception is discarded after timeout. Workers never
+          mutate executor state: evidence ids are assigned by the caller
+          thread only after an accepted return (_assign_evidence_ids), and
+          each worker writes into its own local ``outcome`` dict;
+        - abandoned workers are counted and capped per investigation
+          (MAX_ABANDONED_WORKERS), and every live worker — including
+          abandoned ones — holds an application-wide WORKER_SLOTS slot until
+          its underlying call actually returns, bounding total tool threads
+          across all concurrent investigations
+          (``max_concurrent_tool_workers``, default 16);
         - first-line defense remains the SDKs' own connect/read timeouts and
           bounded retries configured in the provider adapters, plus the
           overall investigation deadline enforced by the runner.
         """
         if self._abandoned_workers >= MAX_ABANDONED_WORKERS:
-            raise WorkerBudgetExhausted()
+            raise WorkerBudgetExhausted(
+                f"Abandoned-worker budget exhausted ({MAX_ABANDONED_WORKERS} timed-out calls); "
+                "refusing further tool execution for this investigation."
+            )
+
+        token = WORKER_SLOTS.try_acquire()
+        if token is None:
+            raise WorkerBudgetExhausted(
+                f"Application-wide tool worker limit reached "
+                f"({self.settings.max_concurrent_tool_workers} concurrent workers, including "
+                "ones abandoned by timeouts); refusing to spawn more. Retry when load drops."
+            )
 
         outcome: dict[str, Any] = {}
         done = threading.Event()
@@ -223,13 +308,21 @@ class ToolExecutor:
                 outcome["error"] = exc
             finally:
                 done.set()
+                # Slot is held until the underlying call truly finishes —
+                # releasing here (not in the caller) is what makes abandoned
+                # workers count against the global bound while they live.
+                WORKER_SLOTS.release(token)
 
         worker = threading.Thread(
             target=target,
             daemon=True,
             name=f"tool-{tool}-{self.investigation_id}",
         )
-        worker.start()
+        try:
+            worker.start()
+        except BaseException:
+            WORKER_SLOTS.release(token)  # thread never ran; return its slot
+            raise
         if not done.wait(self.settings.tool_timeout_seconds):
             self._abandoned_workers += 1
             raise ToolTimeout()
@@ -256,7 +349,7 @@ class ToolExecutor:
         ]
         output = {"resources": listing}
         evidence = Evidence(
-            id=self._next_evidence_id(),
+            id=PENDING_EVIDENCE_ID,
             type="metadata",
             source_tool="list_resources",
             title=f"Resource inventory ({self.adapter.id})",
@@ -276,7 +369,7 @@ class ToolExecutor:
             f" zone={detail.zone or detail.region or 'n/a'} machine={detail.machine_type or 'n/a'}"
         )
         evidence = Evidence(
-            id=self._next_evidence_id(),
+            id=PENDING_EVIDENCE_ID,
             type="metadata",
             source_tool="get_resource_metadata",
             title=f"Metadata for {detail.name}",
@@ -308,7 +401,7 @@ class ToolExecutor:
         else:
             summary = f"No data points returned for {args.metric}"
         evidence = Evidence(
-            id=self._next_evidence_id(),
+            id=PENDING_EVIDENCE_ID,
             type="metric",
             source_tool="get_metrics",
             title=f"{args.metric} for {args.resource_id}",
@@ -353,7 +446,7 @@ class ToolExecutor:
         if injection_flagged:
             summary += f"; {injection_flagged} entries flagged as possible prompt-injection content"
         evidence = Evidence(
-            id=self._next_evidence_id(),
+            id=PENDING_EVIDENCE_ID,
             type="log",
             source_tool="query_logs",
             title=f"Logs for {args.resource_id} (≥{args.min_severity})",

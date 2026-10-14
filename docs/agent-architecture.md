@@ -23,7 +23,8 @@ interpret ──> plan ──(call_tool)──> act ──> plan …   (≤ max_
 ### Bounds (enforced structurally, not by prompt)
 
 - `max_steps` tool-call ceiling — conditional edge in the graph (default 8).
-- Per-tool timeout (default 20 s) via a worker future; bounded retry budget (default 2) for transient errors only.
+- Per-tool timeout (default 20 s) via an abandoned-on-timeout daemon worker (Python cannot cancel a thread blocked in an SDK call). Workers never mutate executor state: evidence ids are assigned by the calling thread, only for accepted results.
+- Bounded retry budget (default 2) for transient errors only. Abandoned workers are capped per investigation (3) **and** by an application-wide concurrent-worker pool shared across all investigations (`max_concurrent_tool_workers`, default 16) — new tool calls fail fast when the pool is exhausted and recover as stale workers finish.
 - Failed-call budget (3) short-circuits to analysis.
 - Whole-investigation timeout (default 120 s) enforced by the runner.
 - LangGraph `recursion_limit` as a final backstop.

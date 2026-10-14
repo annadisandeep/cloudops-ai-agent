@@ -22,6 +22,7 @@ Single-operator tool, deployed privately (localhost or an access-controlled envi
 - Tool allowlist of four read-only tools; planner output proposing anything else is rejected and logged.
 - Pydantic input validation with `extra="forbid"` on every tool call.
 - Step ceiling, per-tool timeout, retry budget, failed-call budget, investigation timeout, LangGraph recursion limit.
+- Timed-out tool workers are abandoned daemon threads that cannot mutate investigation state (evidence ids are assigned only in the calling thread, for accepted results); live workers — including abandoned ones — are bounded per investigation (3) and by an application-wide pool across all concurrent investigations (`max_concurrent_tool_workers`, default 16, fail-fast on exhaustion).
 - Evidence payloads are size-capped before persistence/prompting.
 
 ### Prompt injection

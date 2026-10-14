@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     tool_timeout_seconds: int = Field(default=20, ge=1, le=120)
     investigation_timeout_seconds: int = Field(default=120, ge=10, le=600)
     tool_retry_budget: int = Field(default=2, ge=0, le=5)
+    # Application-wide cap on concurrently running tool worker threads across
+    # ALL investigations (abandoned timed-out workers hold a slot until their
+    # underlying SDK call returns). New tool calls fail fast when exhausted.
+    max_concurrent_tool_workers: int = Field(default=16, ge=1, le=128)
     log_query_max_limit: int = Field(default=500, ge=1, le=2000)
     max_evidence_payload_bytes: int = Field(default=64_000, ge=1_000)
 
