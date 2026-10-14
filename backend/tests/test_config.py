@@ -40,6 +40,30 @@ def test_config_endpoint_reflects_model_override(client, monkeypatch):
     assert "key" not in str(body["llm"]).lower()
 
 
+def test_gemini_api_key_never_leaks_from_any_endpoint(client, monkeypatch, caplog):
+    """With a configured key, no public endpoint response and no log line may
+    contain the key value (docker-compose passes it as a backend env var)."""
+    sentinel = "SENTINEL-gemini-key-1a2b3c4d5e6f"
+    monkeypatch.setenv("CLOUDOPS_LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("CLOUDOPS_GEMINI_API_KEY", sentinel)
+    get_settings.cache_clear()
+
+    import logging
+
+    with caplog.at_level(logging.DEBUG):
+        responses = [
+            client.get("/api/v1/config"),
+            client.get("/api/v1/providers"),
+            client.get("/api/v1/health"),
+            client.get("/api/v1/overview"),
+            client.get("/api/v1/scenarios"),
+            client.get("/openapi.json"),
+        ]
+    for r in responses:
+        assert sentinel not in r.text, f"API key leaked via {r.request.url}"
+    assert sentinel not in caplog.text, "API key leaked into application logs"
+
+
 def test_gemini_planner_uses_configured_model(monkeypatch):
     monkeypatch.setenv("CLOUDOPS_LLM_PROVIDER", "gemini")
     monkeypatch.setenv("CLOUDOPS_GEMINI_API_KEY", "test-key-not-real")
