@@ -137,15 +137,39 @@ TOOL_SCHEMAS: dict[str, type[BaseModel]] = {
 }
 
 TOOL_DESCRIPTIONS: dict[str, str] = {
-    "list_resources": "List cloud resources visible to the selected provider/account.",
-    "get_resource_metadata": "Fetch metadata for one resource (type, zone, status, labels, IPs).",
-    "get_metrics": (
-        "Fetch a metric time series for a resource. Metrics: cpu_utilization, "
-        "memory_available_mb, disk_used_percent, network_in_bytes, network_out_bytes, "
-        "http_5xx_count, http_request_count, latency_ms_p95."
+    "list_resources": "List cloud resources visible to the selected provider/account. No arguments.",
+    "get_resource_metadata": (
+        "Fetch metadata for one resource (type, zone, status, labels, IPs). "
+        "Arguments: resource_id."
     ),
-    "query_logs": "Query log entries for a resource within a time window, filtered by minimum severity.",
+    "get_metrics": (
+        "Fetch a metric time series for a resource. "
+        "Arguments: resource_id, metric, start, end, step_seconds. "
+        "Metrics: cpu_utilization, memory_available_mb, disk_used_percent, network_in_bytes, "
+        "network_out_bytes, http_5xx_count, http_request_count, latency_ms_p95. "
+        "Time bounds are named exactly 'start' and 'end' (ISO-8601); omit them to use the "
+        "investigation window."
+    ),
+    "query_logs": (
+        "Query log entries for a resource, filtered by minimum severity. "
+        "Arguments: resource_id, start, end, min_severity, query, limit. "
+        "Time bounds are named exactly 'start' and 'end' (ISO-8601); omit them to use the "
+        "investigation window."
+    ),
 }
+
+
+def tool_argument_spec() -> str:
+    """Exact per-tool argument signatures, generated from the Pydantic input
+    schemas (single source of truth — cannot drift from validation)."""
+    lines = []
+    for name in sorted(ALLOWED_TOOLS):
+        fields = []
+        for fname, finfo in TOOL_SCHEMAS[name].model_fields.items():
+            kind = "required" if finfo.is_required() else "optional"
+            fields.append(f"{fname} ({kind})")
+        lines.append(f"- {name}({', '.join(fields) if fields else 'no arguments'})")
+    return "\n".join(lines)
 
 
 def summarize_series(points: list[tuple[datetime, float]], unit: str) -> dict[str, Any]:
@@ -216,8 +240,26 @@ class ToolExecutor:
         try:
             args = TOOL_SCHEMAS[tool](**raw_args)
         except ValidationError as exc:
+            # Never silently discard unknown arguments: the call is rejected and
+            # the error names the offending fields plus the exact allowed set, so
+            # an LLM planner can self-correct on its next decision (the error
+            # text flows back into its prompt history).
+            unexpected = sorted({
+                str(e["loc"][0]) for e in exc.errors() if e["type"] == "extra_forbidden" and e.get("loc")
+            })
+            parts = []
+            if unexpected:
+                parts.append(f"unexpected field(s): {', '.join(unexpected)}")
+            parts.extend(
+                f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
+                for e in exc.errors() if e["type"] != "extra_forbidden"
+            )
+            allowed = ", ".join(TOOL_SCHEMAS[tool].model_fields.keys()) or "none"
             step.status = "failed"
-            step.error = f"Invalid tool arguments: {'; '.join(e['msg'] for e in exc.errors()[:3])}"
+            step.error = (
+                f"Invalid tool arguments ({'; '.join(parts[:4])}). "
+                f"Allowed fields for {tool}: {allowed}."
+            )
             step.duration_ms = 0
             return step, []
         step.input = json.loads(args.model_dump_json(exclude_none=True))
