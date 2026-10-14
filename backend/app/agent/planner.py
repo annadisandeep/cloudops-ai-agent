@@ -30,7 +30,7 @@ from ..security import redact_secrets
 from .analysis import build_report
 from .sanitize import wrap_untrusted_for_llm
 from .state import AgentState
-from .tools import ALLOWED_TOOLS, TOOL_DESCRIPTIONS
+from .tools import ALLOWED_TOOLS, TOOL_DESCRIPTIONS, tool_argument_spec
 
 logger = logging.getLogger("cloudops.agent.planner")
 
@@ -326,10 +326,16 @@ class GeminiPlanner:
             f"time window: {state.get('time_window')}\n"
             f"Steps used: {state.get('step_count', 0)}/{state.get('max_steps')}\n\n"
             f"Available tools:\n{tools_desc}\n\n"
+            f"Exact tool signatures (args_json may contain ONLY these argument names — any "
+            f"other key is rejected by strict validation and wastes an investigation step):\n"
+            f"{tool_argument_spec()}\n\n"
+            "Time bounds are named exactly 'start' and 'end' (ISO-8601 strings) — never "
+            "start_time/end_time — and may be omitted to use the investigation window.\n\n"
             f"History:\n{self._history_block(state)}\n\n"
             "Decide the single next action. Provide tool arguments in args_json as a "
-            "JSON object string. Finish when you have enough evidence "
-            "(metadata + relevant metrics + logs) or when remaining steps are low."
+            "JSON object string using only the exact argument names above. Finish when you "
+            "have enough evidence (metadata + relevant metrics + logs) or when remaining "
+            "steps are low."
         )
         raw = self._generate(prompt, _GeminiDecision)
         assert isinstance(raw, _GeminiDecision)

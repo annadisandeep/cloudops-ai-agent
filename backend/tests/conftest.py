@@ -12,12 +12,21 @@ from app.config import get_settings
 
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path, monkeypatch):
-    """Fresh settings + isolated SQLite DB per test."""
+    """Fresh settings + isolated SQLite DB per test.
+
+    Also chdir into tmp_path so pydantic-settings never reads the developer's
+    real ``backend/.env`` (relative ``.env`` lookup): tests must be hermetic,
+    and a local Gemini key or model/limit overrides must never leak into them.
+    """
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CLOUDOPS_DB_PATH", str(tmp_path / f"test-{uuid.uuid4().hex}.db"))
     monkeypatch.setenv("CLOUDOPS_DEMO_MODE", "true")
     monkeypatch.setenv("CLOUDOPS_GCP_ENABLED", "false")
     monkeypatch.setenv("CLOUDOPS_AWS_ENABLED", "false")
     monkeypatch.setenv("CLOUDOPS_LLM_PROVIDER", "mock")
+    # Neutralize any developer-exported LLM variables for determinism.
+    monkeypatch.delenv("CLOUDOPS_GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("CLOUDOPS_GEMINI_MODEL", raising=False)
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
