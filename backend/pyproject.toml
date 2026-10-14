@@ -1,0 +1,21 @@
+[project]
+name = "cloudops-ai-agent-backend"
+version = "0.1.0"
+description = "AI-powered cloud operations incident investigation backend"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["B008"]  # FastAPI Query(...) defaults in signatures
+
+[tool.ruff.lint.per-file-ignores]
+# Demo fixtures contain long realistic log-message strings.
+"app/demo/data.py" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

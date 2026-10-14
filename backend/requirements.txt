@@ -1,0 +1,17 @@
+# Runtime dependencies — CloudOps AI Agent backend
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+pydantic>=2.8,<3.0
+pydantic-settings>=2.4,<3.0
+
+# Agent orchestration
+langgraph>=0.2
+
+# LLM provider (optional at runtime — mock provider needs no key)
+google-genai>=1.0
+
+# Cloud SDKs (imported lazily; demo mode works without credentials)
+boto3>=1.34
+google-cloud-compute>=1.19
+google-cloud-monitoring>=2.21
+google-cloud-logging>=3.10

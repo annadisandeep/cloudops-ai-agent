@@ -1,0 +1,100 @@
+{
+  "items": [
+    {
+      "id": "gcp-high-cpu",
+      "title": "High CPU utilization on GCP VM",
+      "provider": "gcp",
+      "severity": "high",
+      "category": "performance",
+      "resource_id": "web-frontend-1",
+      "resource_name": "web-frontend-1",
+      "description": "Compute Engine instance web-frontend-1 has sustained CPU utilization above 90% for more than 30 minutes while request volume roughly tripled.",
+      "time_window": {
+        "start": "2026-10-14T11:02:00Z",
+        "end": "2026-10-14T12:32:00Z"
+      },
+      "suggested_question": "Why is my GCP VM experiencing high CPU utilization?",
+      "simulated": true
+    },
+    {
+      "id": "gcp-low-memory",
+      "title": "Low memory availability on API backend",
+      "provider": "gcp",
+      "severity": "high",
+      "category": "memory",
+      "resource_id": "api-backend-1",
+      "resource_name": "api-backend-1",
+      "description": "Available memory on api-backend-1 has declined steadily from ~2.6 GB to under 200 MB over 90 minutes without a matching traffic increase \u2014 consistent with a leak.",
+      "time_window": {
+        "start": "2026-10-14T11:02:00Z",
+        "end": "2026-10-14T12:32:00Z"
+      },
+      "suggested_question": "Why is api-backend-1 running out of memory?",
+      "simulated": true
+    },
+    {
+      "id": "app-5xx-errors",
+      "title": "Application HTTP 5xx error spike",
+      "provider": "gcp",
+      "severity": "critical",
+      "category": "errors",
+      "resource_id": "web-frontend-2",
+      "resource_name": "web-frontend-2",
+      "description": "web-frontend-2 began returning elevated HTTP 5xx responses about an hour ago. Errors correlate with database connection pool exhaustion.",
+      "time_window": {
+        "start": "2026-10-14T11:02:00Z",
+        "end": "2026-10-14T12:32:00Z"
+      },
+      "suggested_question": "What caused the application errors on web-frontend-2?",
+      "simulated": true
+    },
+    {
+      "id": "deploy-degradation",
+      "title": "Service degradation after deployment",
+      "provider": "gcp",
+      "severity": "medium",
+      "category": "deployment",
+      "resource_id": "checkout-service-1",
+      "resource_name": "checkout-service-1",
+      "description": "p95 latency on checkout-service-1 roughly tripled immediately after release v2.4.1 was deployed; CPU rose moderately. No errors yet, but SLO burn rate is elevated.",
+      "time_window": {
+        "start": "2026-10-14T11:02:00Z",
+        "end": "2026-10-14T12:32:00Z"
+      },
+      "suggested_question": "Did the latest deployment degrade checkout-service-1?",
+      "simulated": true
+    },
+    {
+      "id": "storage-capacity",
+      "title": "Storage capacity warning on data warehouse",
+      "provider": "gcp",
+      "severity": "medium",
+      "category": "storage",
+      "resource_id": "data-warehouse-1",
+      "resource_name": "data-warehouse-1",
+      "description": "Disk usage on data-warehouse-1 climbed from 78% to above 90% during the current window and will breach capacity within days at the current ingest rate.",
+      "time_window": {
+        "start": "2026-10-14T11:02:00Z",
+        "end": "2026-10-14T12:32:00Z"
+      },
+      "suggested_question": "Which resources need attention for storage capacity?",
+      "simulated": true
+    },
+    {
+      "id": "aws-ec2-performance",
+      "title": "AWS EC2 performance incident",
+      "provider": "aws",
+      "severity": "high",
+      "category": "performance",
+      "resource_id": "i-0f1e2d3c4b5a69788",
+      "resource_name": "i-0f1e2d3c4b5a69788",
+      "description": "EC2 instance batch-worker-1 (i-0f1e2d3c4b5a69788) shows near-saturated CPU and an 8x inbound network spike after a backlog of batch jobs was released at once.",
+      "time_window": {
+        "start": "2026-10-14T11:02:00Z",
+        "end": "2026-10-14T12:32:00Z"
+      },
+      "suggested_question": "Summarize the AWS EC2 incident on batch-worker-1.",
+      "simulated": true
+    }
+  ]
+}
