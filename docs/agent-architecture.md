@@ -58,7 +58,9 @@ This is the fully tested demo path and the automatic fallback when an LLM fails.
 - Uses the official `google-genai` SDK with `response_schema` (structured output validated by Pydantic).
 - The decide step gets the tool catalog + sanitized history; a proposed tool outside the allowlist is never executed.
 - The report step receives the deterministic analyzer's baseline and refines prose; evidence ids referencing nonexistent evidence are stripped after validation.
-- Fails closed without an API key. Status: implemented and mock-tested; verify your model id (`CLOUDOPS_GEMINI_MODEL`) against your API access.
+- The planning prompt includes exact per-tool argument signatures generated from the Pydantic input schemas (`tool_argument_spec()`), and a rejected call's error names the offending fields plus the allowed set, so the model can self-correct on its next step. Tool arguments travel as a JSON string (`args_json`) because the Gemini Developer API rejects open-dict schemas.
+- Wrapped in `ResilientPlanner`: a runtime Gemini failure during planning or report writing degrades that investigation to the mock planner, with the report's `llm_provider` naming the engine that actually wrote it.
+- Fails closed without an API key. Status: implemented, mock-tested, and verified against the live API with `gemini-3.5-flash-lite` on simulated telemetry (2026-10-14; see [gemini.md](gemini.md)). Verify your model id (`CLOUDOPS_GEMINI_MODEL`) against your API access.
 
 ## Grounding & anti-fabrication rules
 
