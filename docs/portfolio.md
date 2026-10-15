@@ -15,11 +15,11 @@ LLM products in operations fail in two predictable ways: they hallucinate root c
 - **Security engineering** — fail-closed provider allowlists (STS-verified on AWS), secret redaction on all telemetry, prompt-injection detection + untrusted-data delimiting (with a demo scenario that actually attempts an injection), rate limiting, strict validation, non-root containers, no credentials anywhere near the browser.
 - **Cloud adapters** — read-only GCP (Compute/Monitoring/Logging) and AWS (EC2/CloudWatch/Logs) adapters with pagination, bounded retries, and metric mapping; a deterministic synthetic demo environment with six realistic incident scenarios so the entire product runs with zero credentials.
 - **Product surface** — a minimal monochrome React dashboard (Linear/Vercel-style): inventory, monitoring charts (hand-rolled SVG), an investigation workspace with a tool-execution timeline and evidence panel, persistent incident history, and Markdown report export.
-- **Delivery** — 112 backend + 23 frontend tests (including a real-HTTP end-to-end investigation), GitHub Actions CI, non-root Docker images + Compose, and validation-ready Terraform (Cloud Run + least-privilege IAM) that provisions nothing by default.
+- **Delivery** — 153 backend + 23 frontend tests (including a real-HTTP end-to-end investigation), GitHub Actions CI, non-root Docker images + Compose, and validation-ready Terraform (Cloud Run + least-privilege IAM) that provisions nothing by default.
 
 ### Honest status
 
-Demo mode is fully implemented and tested. GCP/AWS live adapters and the Gemini planner are implemented and mock-tested, pending verification against live accounts. There is no multi-user auth — deployment guidance mandates an authenticating proxy.
+Demo mode is fully implemented and tested. The Gemini planner is implemented, mock-tested, and has been verified end-to-end against the live Gemini API (`gemini-3.5-flash-lite`, 2026-10-14) on simulated telemetry, including the resilient fallback path after a real `503`. GCP/AWS live adapters are implemented and mock-tested, pending verification against real cloud accounts. There is no multi-user auth — deployment guidance mandates an authenticating proxy.
 
 ---
 
@@ -29,6 +29,6 @@ Demo mode is fully implemented and tested. GCP/AWS live adapters and the Gemini 
 >
 > A LangGraph-orchestrated agent interprets an incident question, chooses from a strict allowlist of read-only tools, pulls monitoring metrics, logs, and metadata from GCP/AWS (or a built-in simulated environment), correlates the signals, and produces a structured report where every fact cites the evidence behind it — complete with likelihood-ranked causes, safe remediation steps, confidence, and limitations.
 >
-> Built with Python/FastAPI, LangGraph, Gemini (structured output), React + TypeScript, Docker, GitHub Actions, and Terraform. Security-first design: fail-closed cloud allowlists, secret redaction, prompt-injection defenses for untrusted logs, bounded agent execution, and zero credentials in the browser. 135 automated tests including a real-HTTP end-to-end agent run.
+> Built with Python/FastAPI, LangGraph, Gemini (structured output, verified against the live API), React + TypeScript, Docker, GitHub Actions, and Terraform. Security-first design: fail-closed cloud allowlists, secret redaction, prompt-injection defenses for untrusted logs, bounded agent execution, and zero credentials in the browser. 176 automated tests including a real-HTTP end-to-end agent run.
 >
 > #AgenticAI #LangGraph #CloudOps #SRE #GCP #AWS #FastAPI #React #Terraform

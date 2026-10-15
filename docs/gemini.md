@@ -5,7 +5,7 @@ The agent ships with two planners:
 - `mock` (default) — deterministic, fully tested, zero cost, no key.
 - `gemini` — LLM planning and report prose via the official **google-genai** SDK with structured output.
 
-Status: the Gemini planner is **implemented and mock-tested** (schema-validated decisions, allowlist guard, evidence-id validation, fail-closed without a key). It has not been exercised against the live API in this repository.
+Status: the Gemini planner is **implemented, mock-tested, and verified against the live Gemini API**. Automated tests cover schema-validated decisions, the allowlist guard, evidence-id validation, fail-closed behaviour without a key, and the resilient fallback. On 2026-10-14 it was run manually with `CLOUDOPS_GEMINI_MODEL=gemini-3.5-flash-lite` on simulated demo telemetry: two investigations completed with Gemini-chosen tool calls and Gemini-authored reports (`llm_provider: "gemini"`, 4 and 1 tool calls, ~10 s and ~6 s). An earlier run with `gemini-3.8-flash` hit a live `503 UNAVAILABLE` at planning step 0 and completed via the deterministic fallback with an `api_server_error` limitation. The verified run also surfaced that the model guessed `start_time`/`end_time` for the `start`/`end` arguments; the prompt now carries exact schema-derived signatures (see [agent-architecture.md](agent-architecture.md)). Live cloud telemetry was **not** involved in any of these runs.
 
 ## Enabling
 
@@ -18,7 +18,7 @@ Status: the Gemini planner is **implemented and mock-tested** (schema-validated 
    ```
 3. Restart the backend. `/api/v1/config` will report `llm.provider: "gemini"` (the key itself is never exposed).
 
-**Verify the model id.** The default `gemini-3.8-flash` is the stable GA Flash model as of October 2026 (the 2.x series is retired; `gemini-3.7-flash` was deprecated 2026-10-08). Model availability changes — confirm `CLOUDOPS_GEMINI_MODEL` is available to your key (e.g. list models in AI Studio) before relying on it. The app does not assume a model exists — a bad id fails the investigation with a safe error, and the deterministic analyzer still produces the report baseline.
+**Verify the model id.** The default `gemini-3.8-flash` is the stable GA Flash model as of October 2026 (the 2.x series is retired; `gemini-3.7-flash` was deprecated 2026-10-08). The id verified end-to-end in this repository is `gemini-3.5-flash-lite`, chosen because `gemini-3.8-flash` was returning `503 UNAVAILABLE` under demand at the time. Model availability changes — confirm `CLOUDOPS_GEMINI_MODEL` is available to your key (e.g. list models in AI Studio) before relying on it. The app does not assume a model exists — a bad id fails the investigation with a safe error, and the deterministic analyzer still produces the report baseline.
 
 ## Behavior & safeguards
 
